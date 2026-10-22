@@ -1,0 +1,35 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Persistent Volumes / Database Data
+data/
+mysql_data/
+grafana_data/
+prometheus_data/
+loki_data/
+
+# SSL Certificates (Chỉ giữ cert mẫu/script sinh cert, không commit private key thật nếu có)
+nginx/ssl/*.key
+nginx/ssl/*.crt
+!nginx/ssl/.gitkeep
+
+# Operating System & IDE Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
