@@ -1,14 +1,6 @@
-version: '3.8'
-
-# ==============================================================================
-# HỆ THỐNG BLOG / CMS (WORDPRESS) - ĐỀ TÀI 07
-# Môn: Triển khai và Quản trị Hệ thống Phần mềm
-# Triển khai: Nginx Reverse Proxy, WordPress, MySQL, phpMyAdmin
-# ==============================================================================
-
 services:
   # ----------------------------------------------------------------------------
-  # 1. Cơ sở dữ liệu MySQL (Cách ly bảo mật - Hardening)
+  # 1. Cơ sở dữ liệu MySQL
   # ----------------------------------------------------------------------------
   mysql:
     image: mysql:8.0
@@ -21,7 +13,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
-    # HARDENING: Không bind port 3306 ra host máy chủ mà chỉ mở trong mạng nội bộ
+    # chi cho phep ket noi noi bo
     expose:
       - "3306"
     networks:
@@ -52,9 +44,8 @@ services:
       WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
       WORDPRESS_DB_USER: ${MYSQL_USER}
       WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
-      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX:-wp_}
+      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX:-hl_}
       WORDPRESS_DEBUG: ${WORDPRESS_DEBUG:-0}
-      # Nhận diện SSL HTTPS qua Nginx Reverse Proxy
       WORDPRESS_CONFIG_EXTRA: |
         define('FORCE_SSL_ADMIN', true);
         if (isset($$_SERVER['HTTP_X_FORWARDED_PROTO']) && $$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
@@ -74,7 +65,7 @@ services:
           memory: 512M
 
   # ----------------------------------------------------------------------------
-  # 3. Công cụ Quản trị CSDL (phpMyAdmin)
+  # 3. Quản trị CSDL (phpMyAdmin)
   # ----------------------------------------------------------------------------
   phpmyadmin:
     image: phpmyadmin/phpmyadmin:latest
@@ -99,7 +90,7 @@ services:
           memory: 256M
 
   # ----------------------------------------------------------------------------
-  # 4. Nginx Reverse Proxy (Cổng giao tiếp duy nhất ra ngoài - HTTPS / SSL)
+  # 4. Nginx Reverse Proxy (SSL / HTTPS)
   # ----------------------------------------------------------------------------
   nginx:
     image: nginx:alpine
@@ -123,18 +114,112 @@ services:
           cpus: '0.5'
           memory: 256M
 
-# ==============================================================================
-# MẠNG VÀ PHÂN VÙNG DỮ LIỆU (NETWORKS & VOLUMES)
-# ==============================================================================
+  # ----------------------------------------------------------------------------
+  # 5. cAdvisor: Giám sát tài nguyên container (CPU/RAM)
+  # ----------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cms_cadvisor
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    expose:
+      - "8080"
+    networks:
+      - monitor_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ----------------------------------------------------------------------------
+  # 6. MySQL Exporter: Cào metrics CSDL MySQL
+  # ----------------------------------------------------------------------------
+  mysql-exporter:
+    image: prom/mysqld-exporter:latest
+    container_name: cms_mysql_exporter
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command:
+      - "--mysqld.address=mysql:3306"
+      - "--mysqld.username=root"
+    environment:
+      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    expose:
+      - "9104"
+    networks:
+      - backend_net
+      - monitor_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+
+  # ----------------------------------------------------------------------------
+  # 7. Prometheus Server: Thu thập & lưu trữ metrics
+  # ----------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cms_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - monitor_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # ----------------------------------------------------------------------------
+  # 8. Grafana: Giao diện trực quan hóa Dashboard
+  # ----------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cms_grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-hoang}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-hoang}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks:
+      - monitor_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
 networks:
-  # Mạng ngoài: Chỉ Nginx tiếp nhận request và chuyển tiếp đến WordPress / phpMyAdmin
   frontend_net:
     driver: bridge
-  # Mạng nội bộ: Chỉ WordPress, phpMyAdmin và Database giao tiếp với nhau
   backend_net:
+    driver: bridge
+  monitor_net:
     driver: bridge
 
 volumes:
   mysql_data:
   wordpress_data:
   nginx_logs:
+  prometheus_data:
+  grafana_data:
