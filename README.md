@@ -1,37 +1,35 @@
-# Blog & CMS Deployment
+# Hệ thống Blog / CMS (WordPress) - Đề Tài 07
 
-Triển khai hệ thống Blog / CMS (WordPress) sử dụng Docker Compose, Nginx Reverse Proxy (SSL/HTTPS), tích hợp giám sát và quản lý log tập trung.
+* **Môn học:** Triển khai và Quản trị Hệ thống Phần mềm
+* **Mã số sinh viên (MSSV):** DTC245200570
+* **Repository:** https://github.com/DTC245200570/Blog-CMS
+
+Triển khai hệ thống Blog / CMS (WordPress) sử dụng Docker Compose, Nginx Reverse Proxy (SSL/HTTPS), tích hợp giám sát Prometheus, Grafana và quản lý log tập trung Loki + Promtail.
 
 ---
 
 ## 1. Kiến trúc hệ thống
 
-```
-[ Client / Browser ]
-        |
-        v (Port 80/443)
-+----------------------------------------------------+
-| Nginx Reverse Proxy (SSL + Security Headers)       |
-+----------------------------------------------------+
-      | (frontend_net)              | (frontend_net)
-      v                             v
-+------------------+         +------------------+
-| WordPress (CMS)  |         |    phpMyAdmin    |
-+------------------+         +------------------+
-      | (backend_net)               | (backend_net)
-      +---------------> +------------------+ <-----+
-                        |  MySQL Database  |
-                        +------------------+
+```mermaid
+graph TD
+    User["Người dùng (Độc giả / Admin)"] -->|HTTPS :443 / HTTP :80| Nginx["Nginx Reverse Proxy<br/>(SSL + Security Headers + Rate Limit)"]
 
-================= Monitoring & Logging =================
-+-------------+     +------------+     +-------------------+
-| Prometheus  | <-- | cAdvisor   |     | mysqld-exporter   |
-+-------------+     +------------+     +-------------------+
-      |
-      v
-+-------------+     +------------+     +-------------------+
-|   Grafana   | <-- |    Loki    | <-- | Promtail          |
-+-------------+     +------------+     +-------------------+
+    subgraph "Ứng dụng & Cơ sở dữ liệu"
+        Nginx -->|"proxy :80 (frontend_net)"| WP["WordPress CMS<br/>(Cổng Độc giả & Quản trị)"]
+        Nginx -->|"proxy /pma/ (frontend_net)"| PMA["phpMyAdmin<br/>(Quản trị CSDL)"]
+        WP -->|"SQL :3306 (backend_net)"| DB[("MySQL 8.0<br/>wordpress_db<br/>(Không mở cổng ra host)")]
+        PMA -->|"SQL :3306 (backend_net)"| DB
+    end
+
+    subgraph "Giám sát & Quản lý Log tập trung"
+        Nginx -.->|"proxy :3000"| Grafana["Grafana Dashboard<br/>(Giám sát Container & MySQL)"]
+        Grafana -->|"PromQL"| Prom["Prometheus (TSDB)"]
+        Grafana -->|"LogQL"| Loki["Loki (Lưu trữ Log)"]
+        Promtail["Promtail Agent"] -->|"Đẩy log"| Loki
+        cAdvisor["cAdvisor"] -->|"Thu metrics"| Prom
+        MySQLExp["mysqld-exporter"] -->|"Thu metrics"| Prom
+        DockerDaemon["Docker Containers JSON Logs"] -.->|"Thu thập"| Promtail
+    end
 ```
 
 ---
@@ -92,19 +90,19 @@ docker compose ps
 ---
 
 ## 5. Truy vấn LogQL mẫu trên Grafana
-Truy cập Grafana > **Explore** > chọn nguồn dữ liệu **Loki**:
-- Xem toàn bộ access log Nginx:
-  ```logql
-  {job="nginx"}
-  ```
-- Lọc log lỗi status >= 400:
-  ```logql
-  {job="nginx"} | status >= 400
-  ```
-- Tần suất request mỗi phút:
-  ```logql
-  rate({job="nginx"}[1m])
-  ```
+Truy cập Grafana > **Explore** > chọn data source **Loki**:
+1. **Lọc log Nginx truy cập theo method GET:**
+   ```logql
+   {job="nginx"} |= "GET"
+   ```
+2. **Lọc các request phát sinh lỗi (status code >= 400):**
+   ```logql
+   {job="nginx"} | json | status >= 400
+   ```
+3. **Đo đếm tần suất truy cập web server (Requests/phút):**
+   ```logql
+   rate({job="nginx"}[1m])
+   ```
 
 ---
 

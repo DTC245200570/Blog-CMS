@@ -1,4 +1,4 @@
-# Script kiem thu he thong Blog-CMS (Commit 1 & Commit 2)
+# Script kiem thu tu dong he thong Blog-CMS (Full Stack)
 $ErrorActionPreference = "Continue"
 
 $totalTests = 0
@@ -34,7 +34,7 @@ function Run-Test {
 }
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "   BAT DAU KIEM THU TU DONG HE THONG BLOG-CMS (COMMIT 1 & COMMIT 2)   " -ForegroundColor Cyan
+Write-Host " BAT DAU KIEM THU TU DONG HE THONG BLOG-CMS (FULL STACK COMMIT 1, 2, 3) " -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -42,12 +42,12 @@ Write-Host ""
 # NHOM 1: KIEM THU TRANG THAI CONTAINER & TAI NGUYEN
 # ------------------------------------------------------------------------------
 
-Run-Test -Category "Container" -TestName "Tat ca 8 containers deu dang chay (Up/Running)" -TestBlock {
-    $expected = @("cms_nginx", "cms_wordpress", "cms_mysql", "cms_phpmyadmin", "cms_cadvisor", "cms_mysql_exporter", "cms_prometheus", "cms_grafana")
+Run-Test -Category "Container" -TestName "Tat ca 10 containers deu dang chay (Up/Running)" -TestBlock {
+    $expected = @("cms_nginx", "cms_wordpress", "cms_mysql", "cms_phpmyadmin", "cms_cadvisor", "cms_mysql_exporter", "cms_prometheus", "cms_grafana", "cms_loki", "cms_promtail")
     $running = (docker ps --format "{{.Names}}") -split "`r?`n"
     $missing = $expected | Where-Object { $_ -notin $running }
     if ($missing.Count -eq 0) {
-        return @{ Passed = $true; Message = "8/8 containers deu dang hoat dong binh thuong" }
+        return @{ Passed = $true; Message = "10/10 containers deu dang hoat dong binh thuong" }
     } else {
         return @{ Passed = $false; Message = ("Thieu container: {0}" -f ($missing -join ", ")) }
     }
@@ -80,9 +80,9 @@ Run-Test -Category "BaoMat" -TestName "[Test bien] CSDL cms_mysql khong publish 
     $ports = docker port cms_mysql 2>$null
     $portJson = docker inspect --format "{{json .NetworkSettings.Ports}}" cms_mysql
     if ([string]::IsNullOrWhiteSpace($ports) -and $portJson -match '"3306/tcp":null') {
-        return @{ Passed = $true; Message = "CHINH XAC: CSDL MySQL duoc an hoan toan (khong co port forwarding ra Host)" }
+        return @{ Passed = $true; Message = "CSDL MySQL khong expose port ra ngoai Host" }
     } else {
-        return @{ Passed = $false; Message = ("CANH BAO: cms_mysql dang mo port ra ngoai: {0}" -f $ports) }
+        return @{ Passed = $false; Message = ("cms_mysql dang mo port ra ngoai: {0}" -f $ports) }
     }
 }
 
@@ -254,7 +254,7 @@ Run-Test -Category "GiamSat" -TestName "Prometheus Time Series DB (Query API Pro
             if ($val -ne "1") { $allUp = $false }
         }
         if ($metrics.Count -ge 3 -and $allUp) {
-            return @{ Passed = $true; Message = ("TSDB luu tru chi so on dinh, ca {0} targets deu tra ve 1" -f $metrics.Count) }
+            return @{ Passed = $true; Message = ("Ca {0} targets deu tra ve gia tri up = 1" -f $metrics.Count) }
         } else {
             return @{ Passed = $false; Message = "Ket qua PromQL chua dat 100% UP" }
         }
@@ -286,6 +286,99 @@ Run-Test -Category "GiamSat" -TestName "Grafana Auto-Provisioning: Tu dong nap D
             return @{ Passed = $true; Message = ("Data Source Prometheus tu dong nap san sang (Url: {0}, isDefault: True)" -f $promDs.url) }
         } else {
             return @{ Passed = $false; Message = "Chua tim thay default Prometheus Data Source trong Grafana" }
+        }
+    } catch {
+        return @{ Passed = $false; Message = $_.Exception.Message }
+    }
+}
+
+# ------------------------------------------------------------------------------
+# NHOM 4: KIEM THU HE THONG LOG TAP TRUNG (LOKI & PROMTAIL - COMMIT 3)
+# ------------------------------------------------------------------------------
+
+Run-Test -Category "Logging" -TestName "Loki Server Healthcheck (/ready)" -TestBlock {
+    try {
+        $ready = Invoke-RestMethod -Uri "http://localhost:3100/ready" -TimeoutSec 5
+        if ($ready -match "ready") {
+            return @{ Passed = $true; Message = "Loki Server san sang (status: ready)" }
+        } else {
+            return @{ Passed = $false; Message = ("Loki status: {0}" -f $ready) }
+        }
+    } catch {
+        return @{ Passed = $false; Message = $_.Exception.Message }
+    }
+}
+
+Run-Test -Category "Logging" -TestName "Promtail thu thap va day log Nginx vao Loki" -TestBlock {
+    try {
+        & curl.exe -k -s -o NUL "https://localhost/"
+        Start-Sleep -Seconds 2
+        $encoded = [System.Uri]::EscapeDataString('{job="nginx"}')
+        $queryResult = Invoke-RestMethod -Uri "http://localhost:3100/loki/api/v1/query_range?query=$encoded" -TimeoutSec 5
+        if ($queryResult.status -eq "success" -and $queryResult.data.result.Count -gt 0) {
+            return @{ Passed = $true; Message = ("Promtail da day {0} stream log vao Loki thanh cong" -f $queryResult.data.result.Count) }
+        } else {
+            return @{ Passed = $false; Message = "Chua tim thay streams log cua job='nginx' trong Loki" }
+        }
+    } catch {
+        return @{ Passed = $false; Message = $_.Exception.Message }
+    }
+}
+
+Run-Test -Category "Logging" -TestName "Grafana Auto-Provisioning: Tu dong nap Data Source Loki" -TestBlock {
+    try {
+        $pair = "hoang:hoang"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
+        $datasources = Invoke-RestMethod -Uri "http://localhost:3000/api/datasources" -Headers @{Authorization="Basic $encoded"} -TimeoutSec 5
+        $lokiDs = $datasources | Where-Object { $_.type -eq "loki" }
+        if ($lokiDs) {
+            return @{ Passed = $true; Message = ("Data Source Loki tu dong nap san sang (Url: {0})" -f $lokiDs.url) }
+        } else {
+            return @{ Passed = $false; Message = "Chua tim thay Data Source Loki trong Grafana" }
+        }
+    } catch {
+        return @{ Passed = $false; Message = $_.Exception.Message }
+    }
+}
+
+Run-Test -Category "Logging" -TestName "LogQL 1: Loc log Nginx truy cap theo method GET" -TestBlock {
+    try {
+        $encoded = [System.Uri]::EscapeDataString('{job="nginx"} |= "GET"')
+        $queryResult = Invoke-RestMethod -Uri "http://localhost:3100/loki/api/v1/query_range?query=$encoded" -TimeoutSec 5
+        if ($queryResult.status -eq "success" -and $queryResult.data.result.Count -gt 0) {
+            return @{ Passed = $true; Message = ("LogQL tim thay log method GET ({0} stream)" -f $queryResult.data.result.Count) }
+        } else {
+            return @{ Passed = $false; Message = "LogQL khong tim thay log chua chuoi 'GET'" }
+        }
+    } catch {
+        return @{ Passed = $false; Message = $_.Exception.Message }
+    }
+}
+
+Run-Test -Category "Logging" -TestName "LogQL 2: Loc request loi status >= 400" -TestBlock {
+    try {
+        & curl.exe -k -s -o NUL "https://localhost/kiem-thu-loi-404-logql"
+        Start-Sleep -Seconds 2
+        $encoded = [System.Uri]::EscapeDataString('{job="nginx"} | json | status >= 400')
+        $queryResult = Invoke-RestMethod -Uri "http://localhost:3100/loki/api/v1/query_range?query=$encoded" -TimeoutSec 5
+        if ($queryResult.status -eq "success" -and $queryResult.data.result.Count -gt 0) {
+            return @{ Passed = $true; Message = ("LogQL loc duoc HTTP status >= 400 ({0} stream)" -f $queryResult.data.result.Count) }
+        } else {
+            return @{ Passed = $false; Message = "LogQL khong tim thay log status >= 400" }
+        }
+    } catch {
+        return @{ Passed = $false; Message = $_.Exception.Message }
+    }
+}
+
+Run-Test -Category "Logging" -TestName "LogQL 3: Do dem tan suat request rate(1m)" -TestBlock {
+    try {
+        $encoded = [System.Uri]::EscapeDataString('rate({job="nginx"}[1m])')
+        $queryResult = Invoke-RestMethod -Uri "http://localhost:3100/loki/api/v1/query_range?query=$encoded" -TimeoutSec 5
+        if ($queryResult.status -eq "success" -and $queryResult.data.resultType -eq "matrix") {
+            return @{ Passed = $true; Message = "LogQL tinh toan rate request thanh cong" }
+        } else {
+            return @{ Passed = $false; Message = "LogQL tinh toan rate request khong thanh cong" }
         }
     } catch {
         return @{ Passed = $false; Message = $_.Exception.Message }

@@ -1,0 +1,23 @@
+# Cau hinh Promtail agent thu thap log
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+# Luu vi tri dong log da doc de tranh doc trung lap khi khoi dong lai
+positions:
+  filename: /tmp/positions.yaml
+
+# Dia chi may chu Loki nhan log
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+# Muc tieu thu thap log tu volume Nginx
+scrape_configs:
+  - job_name: nginx
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: nginx
+          env: production
+          __path__: /var/log/nginx/*.log # Doc toan bo file .log cua Nginx

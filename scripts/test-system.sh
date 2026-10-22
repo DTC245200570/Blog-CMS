@@ -30,15 +30,15 @@ run_test() {
 }
 
 echo "======================================================================"
-echo "   BAT DAU KIEM THU TU DONG HE THONG BLOG-CMS (COMMIT 1 & COMMIT 2)   "
+echo " BAT DAU KIEM THU TU DONG HE THONG BLOG-CMS (FULL STACK COMMIT 1, 2, 3) "
 echo "======================================================================"
 echo ""
 
 # ------------------------------------------------------------------------------
 # NHOM 1: CONTAINER LIFECYCLE
 # ------------------------------------------------------------------------------
-run_test "Container" "Tat ca 8 containers deu dang chay" bash -c '
-    expected=("cms_nginx" "cms_wordpress" "cms_mysql" "cms_phpmyadmin" "cms_cadvisor" "cms_mysql_exporter" "cms_prometheus" "cms_grafana")
+run_test "Container" "Tat ca 10 containers deu dang chay" bash -c '
+    expected=("cms_nginx" "cms_wordpress" "cms_mysql" "cms_phpmyadmin" "cms_cadvisor" "cms_mysql_exporter" "cms_prometheus" "cms_grafana" "cms_loki" "cms_promtail")
     running=$(docker ps --format "{{.Names}}")
     for c in "${expected[@]}"; do
         if ! echo "$running" | grep -q "^$c$"; then
@@ -46,7 +46,7 @@ run_test "Container" "Tat ca 8 containers deu dang chay" bash -c '
             exit 1
         fi
     done
-    echo "8/8 containers dang hoat dong binh thuong"
+    echo "10/10 containers dang hoat dong binh thuong"
 '
 
 run_test "Container" "MySQL dat trang thai Healthy" bash -c '
@@ -76,7 +76,7 @@ run_test "Container" "Restart policy la unless-stopped" bash -c '
 run_test "BaoMat" "[Test bien] CSDL cms_mysql khong publish port ra ngoai Host" bash -c '
     ports=$(docker port cms_mysql 2>/dev/null)
     if [ -z "$ports" ]; then
-        echo "CHINH XAC: CSDL MySQL an hoan toan khoi mang ngoai"
+        echo "CSDL MySQL khong expose port ra ngoai Host"
     else
         echo "CANH BAO: CSDL dang mo port ra ngoai: $ports"
         exit 1
@@ -180,7 +180,7 @@ run_test "GiamSat" "Prometheus Time Series DB (Query API PromQL \"up\")" bash -c
     json=$(curl -s "http://localhost:9090/api/v1/query?query=up")
     count=$(echo "$json" | grep -o "\"value\":\[[0-9.]*,\"1\"\]" | wc -l)
     if [ "$count" -ge 3 ]; then
-        echo "TSDB luu tru chi so on dinh, $count targets deu tra ve 1"
+        echo "Ca $count targets deu tra ve gia tri up = 1"
     else
         echo "Ket qua PromQL chua dat 100% UP: $count targets dat 1"
         exit 1
@@ -203,6 +203,73 @@ run_test "GiamSat" "Grafana Auto-Provisioning: Nap Data Source Prometheus" bash 
         echo "Data Source Prometheus tu dong nap san sang (isDefault: True)"
     else
         echo "Chua tim thay default Prometheus Data Source trong Grafana"
+        exit 1
+    fi
+'
+
+# ------------------------------------------------------------------------------
+# NHOM 4: LOGGING & LOGQL (LOKI & PROMTAIL - COMMIT 3)
+# ------------------------------------------------------------------------------
+run_test "Logging" "Loki Server Healthcheck (/ready)" bash -c '
+    res=$(curl -s http://localhost:3100/ready)
+    if echo "$res" | grep -q "ready"; then
+        echo "Loki Server san sang (status: ready)"
+    else
+        echo "Loki status: $res"
+        exit 1
+    fi
+'
+
+run_test "Logging" "Promtail thu thap va day log Nginx vao Loki" bash -c '
+    curl -k -s -o /dev/null "https://localhost/"
+    sleep 2
+    res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query={job=\"nginx\"}")
+    if echo "$res" | grep -q "\"status\":\"success\"" && echo "$res" | grep -q "job=\"nginx\""; then
+        echo "Promtail da day stream log Nginx vao Loki thanh cong"
+    else
+        echo "Chua tim thay stream log job=nginx trong Loki"
+        exit 1
+    fi
+'
+
+run_test "Logging" "Grafana Auto-Provisioning: Nap Data Source Loki" bash -c '
+    res=$(curl -s -u hoang:hoang http://localhost:3000/api/datasources)
+    if echo "$res" | grep -q "\"type\":\"loki\""; then
+        echo "Data Source Loki tu dong nap san sang vao Grafana"
+    else
+        echo "Chua tim thay Data Source Loki trong Grafana"
+        exit 1
+    fi
+'
+
+run_test "Logging" "LogQL 1: Loc log Nginx truy cap theo method GET" bash -c '
+    res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query={job=\"nginx\"} |= \"GET\"")
+    if echo "$res" | grep -q "\"status\":\"success\""; then
+        echo "LogQL tim thay log method GET thanh cong"
+    else
+        echo "LogQL truy van method GET that bai"
+        exit 1
+    fi
+'
+
+run_test "Logging" "LogQL 2: Loc request loi status >= 400" bash -c '
+    curl -k -s -o /dev/null "https://localhost/kiem-thu-loi-404-logql"
+    sleep 2
+    res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query={job=\"nginx\"} | json | status >= 400")
+    if echo "$res" | grep -q "\"status\":\"success\""; then
+        echo "LogQL boc tach JSON loc duoc loi HTTP status >= 400"
+    else
+        echo "LogQL loc status >= 400 that bai"
+        exit 1
+    fi
+'
+
+run_test "Logging" "LogQL 3: Do dem tan suat request rate(1m)" bash -c '
+    res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query=rate({job=\"nginx\"}[1m])")
+    if echo "$res" | grep -q "\"resultType\":\"matrix\""; then
+        echo "LogQL tinh rate request thanh cong"
+    else
+        echo "LogQL rate that bai"
         exit 1
     fi
 '

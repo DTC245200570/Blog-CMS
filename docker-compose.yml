@@ -13,17 +13,17 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
-    # chi cho phep ket noi noi bo
+    # Dung expose thay vi ports de khong mo cong 3306 ra ngoai host (bao mat CSDL)
     expose:
       - "3306"
     networks:
-      - backend_net
+      - backend_net # Chi nam trong mang noi bo backend
     deploy:
       resources:
-        limits:
+        limits: # Gioi han tai nguyen de tranh tran bo nho
           cpus: '1.0'
           memory: 512M
-    healthcheck:
+    healthcheck: # Kiem tra MySQL san sang truoc khi cho WordPress ket noi
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
@@ -38,13 +38,13 @@ services:
     restart: unless-stopped
     depends_on:
       mysql:
-        condition: service_healthy
+        condition: service_healthy # Cho MySQL chay xong moi khoi dong WordPress
     environment:
       WORDPRESS_DB_HOST: mysql:3306
       WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
       WORDPRESS_DB_USER: ${MYSQL_USER}
       WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
-      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX:-hl_}
+      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX:-wp_}
       WORDPRESS_DEBUG: ${WORDPRESS_DEBUG:-0}
       WORDPRESS_CONFIG_EXTRA: |
         define('FORCE_SSL_ADMIN', true);
@@ -56,6 +56,7 @@ services:
     expose:
       - "80"
     networks:
+      # Nam o ca 2 mang: frontend_net de Nginx goi vao, backend_net de ket noi MySQL
       - frontend_net
       - backend_net
     deploy:
@@ -99,15 +100,21 @@ services:
     depends_on:
       - wordpress
       - phpmyadmin
+    # Xoa symlink stdout/stderr de ghi log truc tiep vao file, giup Promtail doc duoc log
+    command:
+      - "/bin/sh"
+      - "-c"
+      - "rm -f /var/log/nginx/access.log /var/log/nginx/error.log && touch /var/log/nginx/access.log /var/log/nginx/error.log && exec nginx -g 'daemon off;'"
+    # Nginx la cong duy nhat mo ra ngoai may host
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"
       - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
-      - nginx_logs:/var/log/nginx
+      - nginx_logs:/var/log/nginx # Volume chia se file log sang cho Promtail doc
     networks:
-      - frontend_net
+      - frontend_net # Chi noi voi frontend, khong cho phep truc tiep vao backend
     deploy:
       resources:
         limits:
@@ -115,7 +122,7 @@ services:
           memory: 256M
 
   # ----------------------------------------------------------------------------
-  # 5. cAdvisor: Giám sát tài nguyên container (CPU/RAM)
+  # 5. cAdvisor: Giám sát tài nguyên container (CPU/RAM/Disk/Network)
   # ----------------------------------------------------------------------------
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
@@ -130,7 +137,7 @@ services:
     expose:
       - "8080"
     networks:
-      - monitor_net
+      - monitor_net # Chi nam trong mang giam sat
     deploy:
       resources:
         limits:
@@ -155,6 +162,7 @@ services:
     expose:
       - "9104"
     networks:
+      # Ket noi MySQL o backend_net va cap metrics cho Prometheus qua monitor_net
       - backend_net
       - monitor_net
     deploy:
@@ -192,12 +200,13 @@ services:
     restart: unless-stopped
     depends_on:
       - prometheus
+      - loki
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-hoang}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-hoang}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/provisioning:/etc/grafana/provisioning # Tu dong nhan Data Source Prometheus va Loki
       - grafana_data:/var/lib/grafana
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
@@ -209,17 +218,66 @@ services:
           cpus: '0.5'
           memory: 512M
 
+  # ----------------------------------------------------------------------------
+  # 9. Loki: Lưu trữ log tập trung
+  # ----------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:latest
+    container_name: cms_loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    networks:
+      - monitor_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # ----------------------------------------------------------------------------
+  # 10. Promtail: Thu thập log Nginx và chuyển tiếp tới Loki
+  # ----------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:latest
+    container_name: cms_promtail
+    restart: unless-stopped
+    depends_on:
+      - loki
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - nginx_logs:/var/log/nginx:ro # Doc file access.log va error.log tu volume chia se
+    networks:
+      - monitor_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+
+# ------------------------------------------------------------------------------
+# Phân chia mạng nội bộ (Network Isolation)
+# ------------------------------------------------------------------------------
 networks:
   frontend_net:
-    driver: bridge
+    driver: bridge # Mang giua Nginx va cac web app
   backend_net:
-    driver: bridge
+    driver: bridge # Mang noi bo cho MySQL, khong cho phep Nginx vao truc tiep
   monitor_net:
-    driver: bridge
+    driver: bridge # Mang rieng cho he thong giam sat va thu thap log
 
+# ------------------------------------------------------------------------------
+# Luu tru du lieu (Persistent Volumes)
+# ------------------------------------------------------------------------------
 volumes:
   mysql_data:
   wordpress_data:
   nginx_logs:
   prometheus_data:
   grafana_data:
+  loki_data:
