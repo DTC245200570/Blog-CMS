@@ -44,7 +44,7 @@ cp .env.example .env
 # Windows PowerShell
 Copy-Item .env.example .env
 ```
-Mở file `.env` và thiết lập mật khẩu bắt buộc cho `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`. Nếu để trống, Docker Compose sẽ báo lỗi và từ chối khởi động.
+Mở file `.env` và thiết lập mật khẩu bắt buộc cho `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `MYSQL_EXPORTER_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`. Nếu để trống, Docker Compose sẽ báo lỗi và từ chối khởi động.
 
 ### Bước 2: Tạo chứng chỉ SSL (có SAN cho localhost)
 - **Windows:**
@@ -84,6 +84,7 @@ docker compose ps
 
 ## 4. Các cấu hình bảo mật (Hardening)
 - **Tách mạng nội bộ:** `frontend_net` (Nginx, WordPress, phpMyAdmin), `backend_net` (WordPress, phpMyAdmin, MySQL, Exporter), `monitor_net` (Prometheus, Grafana, Loki, Promtail, cAdvisor). Cổng MySQL (3306) không publish ra ngoài host.
+- **Quyền tối thiểu Database (Least Privilege):** MySQL Exporter sử dụng tài khoản riêng (`exporter`) chỉ có quyền `PROCESS`, `REPLICATION CLIENT`, `SELECT` để thu thập metrics, không chạy bằng tài khoản `root`.
 - **Giới hạn phạm vi cổng quản trị:** Grafana (3000), Prometheus (9090), Loki (3100) chỉ bind trên loopback `127.0.0.1`, không mở ra mạng ngoài.
 - **Nginx Security Headers:** Cấu hình `X-Frame-Options`, `X-Content-Type-Options`, `X-XSS-Protection`, `Strict-Transport-Security`, `Referrer-Policy`.
 - **Giới hạn tài nguyên:** Đặt giới hạn `cpus` và `memory` cho các container trong `docker-compose.yml`.

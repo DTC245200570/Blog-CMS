@@ -33,6 +33,20 @@ function Run-Test {
     }
 }
 
+function Get-GrafanaAuthHeader {
+    $user = if ($env:GRAFANA_ADMIN_USER) { $env:GRAFANA_ADMIN_USER } else { "admin" }
+    $pass = if ($env:GRAFANA_ADMIN_PASSWORD) { $env:GRAFANA_ADMIN_PASSWORD } else { "" }
+    $envFile = Join-Path $PSScriptRoot "..\.env"
+    if (Test-Path $envFile) {
+        Get-Content $envFile | ForEach-Object {
+            if ($_ -match '^\s*GRAFANA_ADMIN_USER\s*=\s*(.*)$') { $user = $matches[1].Trim() }
+            if ($_ -match '^\s*GRAFANA_ADMIN_PASSWORD\s*=\s*(.*)$') { $pass = $matches[1].Trim() }
+        }
+    }
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:${pass}"))
+    return @{ Authorization = "Basic $encoded" }
+}
+
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host " BAT DAU KIEM THU TU DONG HE THONG BLOG-CMS (FULL STACK COMMIT 1, 2, 3) " -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
@@ -92,6 +106,15 @@ Run-Test -Category "BaoMat" -TestName "Co lap mang Bridge (Nginx khong nam trong
         return @{ Passed = $false; Message = "LOI: Nginx bi gan truc tiep vao backend_net" }
     } else {
         return @{ Passed = $true; Message = "Nginx chi ket noi frontend_net, dam bao mo hinh 2 lop an toan" }
+    }
+}
+
+Run-Test -Category "BaoMat" -TestName "MySQL Exporter su dung tai khoan exporter (Least Privilege)" -TestBlock {
+    $cmd = docker inspect --format "{{json .Config.Cmd}}" cms_mysql_exporter 2>$null
+    if ($cmd -match "--mysqld.username=exporter" -and $cmd -notmatch "--mysqld.username=root") {
+        return @{ Passed = $true; Message = "MySQL Exporter chay voi user exporter rieng biet, khong dung root" }
+    } else {
+        return @{ Passed = $false; Message = ("Cua hinh cmd cua exporter: {0}" -f $cmd) }
     }
 }
 
@@ -278,14 +301,28 @@ Run-Test -Category "GiamSat" -TestName "Grafana Server Healthcheck (/api/health)
 
 Run-Test -Category "GiamSat" -TestName "Grafana Auto-Provisioning: Tu dong nap Data Source Prometheus" -TestBlock {
     try {
-        $pair = "hoang:hoang"
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
-        $datasources = Invoke-RestMethod -Uri "http://localhost:3000/api/datasources" -Headers @{Authorization="Basic $encoded"} -TimeoutSec 5
+        $headers = Get-GrafanaAuthHeader
+        $datasources = Invoke-RestMethod -Uri "http://localhost:3000/api/datasources" -Headers $headers -TimeoutSec 5
         $promDs = $datasources | Where-Object { $_.type -eq "prometheus" }
         if ($promDs -and $promDs.isDefault -eq $true) {
             return @{ Passed = $true; Message = ("Data Source Prometheus tu dong nap san sang (Url: {0}, isDefault: True)" -f $promDs.url) }
         } else {
             return @{ Passed = $false; Message = "Chua tim thay default Prometheus Data Source trong Grafana" }
+        }
+    } catch {
+        return @{ Passed = $false; Message = $_.Exception.Message }
+    }
+}
+
+Run-Test -Category "GiamSat" -TestName "Grafana Auto-Provisioning: Tu dong nap Dashboard Blog-CMS" -TestBlock {
+    try {
+        $headers = Get-GrafanaAuthHeader
+        $dashboards = Invoke-RestMethod -Uri "http://localhost:3000/api/search?type=dash-db" -Headers $headers -TimeoutSec 5
+        $found = $dashboards | Where-Object { $_.uid -eq "blog-cms-overview" }
+        if ($found) {
+            return @{ Passed = $true; Message = ("Dashboard nap thanh cong: {0} (UID: {1})" -f $found.title, $found.uid) }
+        } else {
+            return @{ Passed = $false; Message = "Chua tim thay dashboard blog-cms-overview trong Grafana" }
         }
     } catch {
         return @{ Passed = $false; Message = $_.Exception.Message }
@@ -327,9 +364,8 @@ Run-Test -Category "Logging" -TestName "Promtail thu thap va day log Nginx vao L
 
 Run-Test -Category "Logging" -TestName "Grafana Auto-Provisioning: Tu dong nap Data Source Loki" -TestBlock {
     try {
-        $pair = "hoang:hoang"
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
-        $datasources = Invoke-RestMethod -Uri "http://localhost:3000/api/datasources" -Headers @{Authorization="Basic $encoded"} -TimeoutSec 5
+        $headers = Get-GrafanaAuthHeader
+        $datasources = Invoke-RestMethod -Uri "http://localhost:3000/api/datasources" -Headers $headers -TimeoutSec 5
         $lokiDs = $datasources | Where-Object { $_.type -eq "loki" }
         if ($lokiDs) {
             return @{ Passed = $true; Message = ("Data Source Loki tu dong nap san sang (Url: {0})" -f $lokiDs.url) }
@@ -396,9 +432,14 @@ Write-Host (" Tong so ca kiem thu : {0}" -f $totalTests)
 Write-Host (" So ca pass          : {0}" -f $passedTests) -ForegroundColor Green
 if ($failedTests -gt 0) {
     Write-Host (" So ca fail          : {0}" -f $failedTests) -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Ket qua: Co it nhat 1 test case that bai." -ForegroundColor Red
+    Write-Host "======================================================================" -ForegroundColor Cyan
+    exit 1
 } else {
     Write-Host (" So ca fail          : 0") -ForegroundColor Green
     Write-Host ""
     Write-Host "Ket qua: Tat ca cac test case deu PASSED." -ForegroundColor Green
+    Write-Host "======================================================================" -ForegroundColor Cyan
+    exit 0
 }
-Write-Host "======================================================================" -ForegroundColor Cyan

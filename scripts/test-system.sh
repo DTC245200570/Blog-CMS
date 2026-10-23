@@ -10,6 +10,9 @@ TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../.env"
+
 run_test() {
     local category="$1"
     local test_name="$2"
@@ -18,7 +21,7 @@ run_test() {
     printf "[TEST %02d] [%s] %s ... " "$TOTAL_TESTS" "$category" "$test_name"
     
     local output
-    if output=$(eval "$@"); then
+    if output=$("$@" 2>&1); then
         PASSED_TESTS=$((PASSED_TESTS + 1))
         echo -e "\033[32mPASS\033[0m"
         [ -n "$output" ] && echo -e "         -> \033[90m$output\033[0m"
@@ -28,6 +31,22 @@ run_test() {
         [ -n "$output" ] && echo -e "         -> \033[31m$output\033[0m"
     fi
 }
+
+get_grafana_auth() {
+    local env_file="${ENV_FILE:-$SCRIPT_DIR/../.env}"
+    local user="admin"
+    local pass=""
+    if [ -f "$env_file" ]; then
+        user=$(grep -E '^[[:space:]]*GRAFANA_ADMIN_USER=' "$env_file" | cut -d '=' -f2- | tr -d '\r ')
+        pass=$(grep -E '^[[:space:]]*GRAFANA_ADMIN_PASSWORD=' "$env_file" | cut -d '=' -f2- | tr -d '\r ')
+    fi
+    [ -n "$GRAFANA_ADMIN_USER" ] && user="$GRAFANA_ADMIN_USER"
+    [ -n "$GRAFANA_ADMIN_PASSWORD" ] && pass="$GRAFANA_ADMIN_PASSWORD"
+    echo "$user:$pass"
+}
+export -f get_grafana_auth
+GRAFANA_AUTH=$(get_grafana_auth)
+export SCRIPT_DIR ENV_FILE GRAFANA_AUTH
 
 echo "======================================================================"
 echo " BAT DAU KIEM THU TU DONG HE THONG BLOG-CMS (FULL STACK COMMIT 1, 2, 3) "
@@ -90,6 +109,16 @@ run_test "BaoMat" "Co lap mang Bridge (Nginx khong nam trong backend_net)" bash 
         exit 1
     fi
     echo "Nginx chi ket noi frontend_net, dam bao an toan 2 lop"
+'
+
+run_test "BaoMat" "MySQL Exporter su dung tai khoan exporter (Least Privilege)" bash -c '
+    cmd=$(docker inspect --format "{{json .Config.Cmd}}" cms_mysql_exporter 2>/dev/null)
+    if echo "$cmd" | grep -q "\-\-mysqld.username=exporter" && ! echo "$cmd" | grep -q "\-\-mysqld.username=root"; then
+        echo "MySQL Exporter chay voi user exporter rieng biet, khong dung root"
+    else
+        echo "Cau hinh cmd cua exporter: $cmd"
+        exit 1
+    fi
 '
 
 run_test "BaoMat" "Chuyen huong tu dong HTTP (Port 80) sang HTTPS (Port 443) ma 301" bash -c '
@@ -189,7 +218,7 @@ run_test "GiamSat" "Prometheus Time Series DB (Query API PromQL \"up\")" bash -c
 
 run_test "GiamSat" "Grafana Server Healthcheck (/api/health)" bash -c '
     res=$(curl -s http://localhost:3000/api/health)
-    if echo "$res" | grep -q "\"database\":\"ok\""; then
+    if echo "$res" | grep -E -q "\"database\":[[:space:]]*\"ok\""; then
         echo "Grafana hoat dong tot (database: ok)"
     else
         echo "Grafana database chua san sang"
@@ -198,11 +227,23 @@ run_test "GiamSat" "Grafana Server Healthcheck (/api/health)" bash -c '
 '
 
 run_test "GiamSat" "Grafana Auto-Provisioning: Nap Data Source Prometheus" bash -c '
-    res=$(curl -s -u hoang:hoang http://localhost:3000/api/datasources)
+    auth=$(get_grafana_auth)
+    res=$(curl -s -u "$auth" http://localhost:3000/api/datasources)
     if echo "$res" | grep -q "\"type\":\"prometheus\"" && echo "$res" | grep -q "\"isDefault\":true"; then
         echo "Data Source Prometheus tu dong nap san sang (isDefault: True)"
     else
         echo "Chua tim thay default Prometheus Data Source trong Grafana"
+        exit 1
+    fi
+'
+
+run_test "GiamSat" "Grafana Auto-Provisioning: Nap Dashboard Blog-CMS" bash -c '
+    auth=$(get_grafana_auth)
+    res=$(curl -s -u "$auth" "http://localhost:3000/api/search?type=dash-db")
+    if echo "$res" | grep -q "\"uid\":\"blog-cms-overview\""; then
+        echo "Dashboard Blog-CMS tu dong nap thanh cong (UID: blog-cms-overview)"
+    else
+        echo "Chua tim thay dashboard blog-cms-overview trong Grafana"
         exit 1
     fi
 '
@@ -224,7 +265,7 @@ run_test "Logging" "Promtail thu thap va day log Nginx vao Loki" bash -c '
     curl -k -s -o /dev/null "https://localhost/"
     sleep 2
     res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query={job=\"nginx\"}")
-    if echo "$res" | grep -q "\"status\":\"success\"" && echo "$res" | grep -q "job=\"nginx\""; then
+    if echo "$res" | grep -q "\"status\":\"success\"" && echo "$res" | grep -E -q "\"job\":[[:space:]]*\"nginx\""; then
         echo "Promtail da day stream log Nginx vao Loki thanh cong"
     else
         echo "Chua tim thay stream log job=nginx trong Loki"
@@ -233,7 +274,8 @@ run_test "Logging" "Promtail thu thap va day log Nginx vao Loki" bash -c '
 '
 
 run_test "Logging" "Grafana Auto-Provisioning: Nap Data Source Loki" bash -c '
-    res=$(curl -s -u hoang:hoang http://localhost:3000/api/datasources)
+    auth=$(get_grafana_auth)
+    res=$(curl -s -u "$auth" http://localhost:3000/api/datasources)
     if echo "$res" | grep -q "\"type\":\"loki\""; then
         echo "Data Source Loki tu dong nap san sang vao Grafana"
     else
@@ -282,9 +324,14 @@ echo " Tong so ca kiem thu : $TOTAL_TESTS"
 echo -e " So ca pass          : \033[32m$PASSED_TESTS\033[0m"
 if [ "$FAILED_TESTS" -gt 0 ]; then
     echo -e " So ca fail          : \033[31m$FAILED_TESTS\033[0m"
+    echo ""
+    echo -e "\033[31mKet qua: Co it nhat 1 test case that bai.\033[0m"
+    echo "======================================================================"
+    exit 1
 else
     echo -e " So ca fail          : \033[32m0\033[0m"
     echo ""
     echo -e "\033[32mKet qua: Tat ca cac test case deu PASSED.\033[0m"
+    echo "======================================================================"
+    exit 0
 fi
-echo "======================================================================"

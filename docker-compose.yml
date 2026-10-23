@@ -11,8 +11,11 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-blog_db}
       MYSQL_USER: ${MYSQL_USER:-blog_user}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Vui long cau hinh MYSQL_PASSWORD trong .env}
+      MYSQL_EXPORTER_USER: ${MYSQL_EXPORTER_USER:-exporter}
+      MYSQL_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:?Vui long cau hinh MYSQL_EXPORTER_PASSWORD trong .env}
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
     # Dung expose thay vi ports de khong mo cong 3306 ra ngoai host (bao mat CSDL)
     expose:
       - "3306"
@@ -157,9 +160,9 @@ services:
         condition: service_healthy
     command:
       - "--mysqld.address=mysql:3306"
-      - "--mysqld.username=root"
+      - "--mysqld.username=${MYSQL_EXPORTER_USER:-exporter}"
     environment:
-      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:?Vui long cau hinh MYSQL_EXPORTER_PASSWORD trong .env}
     expose:
       - "9104"
     networks:
