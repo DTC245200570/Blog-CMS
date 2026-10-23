@@ -407,14 +407,14 @@ Run-Test -Category "Logging" -TestName "LogQL 2: Loc request loi status >= 400" 
     }
 }
 
-Run-Test -Category "Logging" -TestName "LogQL 3: Do dem tan suat request rate(1m)" -TestBlock {
+Run-Test -Category "Logging" -TestName "LogQL 3: Do dem tan suat request rate(1m) (Don vi: req/s)" -TestBlock {
     try {
         $encoded = [System.Uri]::EscapeDataString('rate({job="nginx"}[1m])')
         $queryResult = Invoke-RestMethod -Uri "http://localhost:3100/loki/api/v1/query_range?query=$encoded" -TimeoutSec 5
-        if ($queryResult.status -eq "success" -and $queryResult.data.resultType -eq "matrix") {
-            return @{ Passed = $true; Message = "LogQL tinh toan rate request thanh cong" }
+        if ($queryResult.status -eq "success" -and $queryResult.data.resultType -eq "matrix" -and $queryResult.data.result.Count -gt 0) {
+            return @{ Passed = $true; Message = "LogQL tinh toan rate request thanh cong (matrix data: hop le, don vi: req/s)" }
         } else {
-            return @{ Passed = $false; Message = "LogQL tinh toan rate request khong thanh cong" }
+            return @{ Passed = $false; Message = "LogQL tinh toan rate request khong co du lieu matrix hop le" }
         }
     } catch {
         return @{ Passed = $false; Message = $_.Exception.Message }

@@ -92,20 +92,23 @@ docker compose ps
 
 ---
 
-## 5. Truy vấn LogQL mẫu trên Grafana
+## 5. Quản lý log tập trung & Truy vấn LogQL mẫu (Loki)
+Promtail được cấu hình thu thập log tập trung cho web server Nginx (`/var/log/nginx/*.log`, gồm `access.log` và `error.log` qua volume chia sẻ `nginx_logs`, gắn nhãn `{job="nginx"}`). Hệ thống không thu thập trực tiếp log stdout của WordPress hay MySQL container qua Promtail để duy trì phạm vi phân tích tập trung tại gateway.
+
 Truy cập Grafana > **Explore** > chọn data source **Loki**:
 1. **Lọc log Nginx truy cập theo method GET:**
    ```logql
    {job="nginx"} |= "GET"
    ```
-2. **Lọc các request phát sinh lỗi (status code >= 400):**
+2. **Lọc các request phát sinh lỗi (HTTP status code >= 400 qua parser JSON):**
    ```logql
    {job="nginx"} | json | status >= 400
    ```
-3. **Đo đếm tần suất truy cập web server (Requests/phút):**
+3. **Đo đếm tần suất truy cập web server (Đơn vị: requests/giây - tính trên cửa sổ trượt 1 phút):**
    ```logql
    rate({job="nginx"}[1m])
    ```
+   *Lưu ý:* Hàm `rate()` trong LogQL đo đếm tần suất số lượng dòng log/yêu cầu trung bình trên mỗi giây (`req/s`) trong khoảng thời gian trượt được chỉ định (`[1m]`).
 
 ---
 

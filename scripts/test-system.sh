@@ -286,10 +286,10 @@ run_test "Logging" "Grafana Auto-Provisioning: Nap Data Source Loki" bash -c '
 
 run_test "Logging" "LogQL 1: Loc log Nginx truy cap theo method GET" bash -c '
     res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query={job=\"nginx\"} |= \"GET\"")
-    if echo "$res" | grep -q "\"status\":\"success\""; then
-        echo "LogQL tim thay log method GET thanh cong"
+    if echo "$res" | grep -q "\"status\":\"success\"" && echo "$res" | grep -q "\"values\":\[\["; then
+        echo "LogQL tim thay log method GET thanh cong (co du lieu dong log)"
     else
-        echo "LogQL truy van method GET that bai"
+        echo "LogQL truy van method GET khong co du lieu"
         exit 1
     fi
 '
@@ -298,20 +298,20 @@ run_test "Logging" "LogQL 2: Loc request loi status >= 400" bash -c '
     curl -k -s -o /dev/null "https://localhost/kiem-thu-loi-404-logql"
     sleep 2
     res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query={job=\"nginx\"} | json | status >= 400")
-    if echo "$res" | grep -q "\"status\":\"success\""; then
-        echo "LogQL boc tach JSON loc duoc loi HTTP status >= 400"
+    if echo "$res" | grep -q "\"status\":\"success\"" && echo "$res" | grep -q "\"values\":\[\["; then
+        echo "LogQL boc tach JSON loc duoc loi HTTP status >= 400 thanh cong"
     else
-        echo "LogQL loc status >= 400 that bai"
+        echo "LogQL loc status >= 400 khong co du lieu"
         exit 1
     fi
 '
 
-run_test "Logging" "LogQL 3: Do dem tan suat request rate(1m)" bash -c '
+run_test "Logging" "LogQL 3: Do dem tan suat request rate(1m) (Don vi: req/s)" bash -c '
     res=$(curl -s -G "http://localhost:3100/loki/api/v1/query_range" --data-urlencode "query=rate({job=\"nginx\"}[1m])")
-    if echo "$res" | grep -q "\"resultType\":\"matrix\""; then
-        echo "LogQL tinh rate request thanh cong"
+    if echo "$res" | grep -q "\"resultType\":\"matrix\"" && echo "$res" | grep -q "\"values\":\[\["; then
+        echo "LogQL tinh rate request thanh cong (matrix hop le, don vi: req/s)"
     else
-        echo "LogQL rate that bai"
+        echo "LogQL rate khong co du lieu matrix"
         exit 1
     fi
 '
