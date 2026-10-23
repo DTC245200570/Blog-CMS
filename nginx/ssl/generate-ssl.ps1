@@ -7,8 +7,9 @@ if (-not (Test-Path $sslDir)) {
 $keyPath = Join-Path $sslDir "server.key"
 $crtPath = Join-Path $sslDir "server.crt"
 
-# Tao khoa RSA 2048-bit va chung chi co thoi han 365 ngay
+# SAN giup trinh duyet xac thuc duoc hostname localhost va IP loopback
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 `
   -keyout $keyPath `
   -out $crtPath `
-  -subj "/C=VN/ST=Hanoi/L=Hanoi/O=HoangLight/CN=localhost"
+  -subj "/C=VN/ST=Hanoi/L=Hanoi/O=BlogCMS/CN=localhost" `
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"

@@ -12,23 +12,23 @@ Triển khai hệ thống Blog / CMS (WordPress) sử dụng Docker Compose, Ngi
 
 ```mermaid
 graph TD
-    User["Người dùng (Độc giả / Admin)"] -->|HTTPS :443 / HTTP :80| Nginx["Nginx Reverse Proxy<br/>(SSL + Security Headers + Rate Limit)"]
+    User["Người dùng (Browser)"] -->|HTTPS :443 / HTTP :80| Nginx["Nginx Reverse Proxy<br/>(SSL/TLS + Security Headers)"]
+    Admin["Quản trị viên (Host)"] -->|"HTTP :3000 (127.0.0.1)"| Grafana["Grafana Dashboard"]
 
     subgraph "Ứng dụng & Cơ sở dữ liệu"
-        Nginx -->|"proxy :80 (frontend_net)"| WP["WordPress CMS<br/>(Cổng Độc giả & Quản trị)"]
+        Nginx -->|"proxy :80 (frontend_net)"| WP["WordPress CMS<br/>(Blog/CMS Container)"]
         Nginx -->|"proxy /pma/ (frontend_net)"| PMA["phpMyAdmin<br/>(Quản trị CSDL)"]
-        WP -->|"SQL :3306 (backend_net)"| DB[("MySQL 8.0<br/>wordpress_db<br/>(Không mở cổng ra host)")]
+        WP -->|"SQL :3306 (backend_net)"| DB[("MySQL 8.0<br/>(Không mở cổng ra host)")]
         PMA -->|"SQL :3306 (backend_net)"| DB
     end
 
-    subgraph "Giám sát & Quản lý Log tập trung"
-        Nginx -.->|"proxy :3000"| Grafana["Grafana Dashboard<br/>(Giám sát Container & MySQL)"]
-        Grafana -->|"PromQL"| Prom["Prometheus (TSDB)"]
-        Grafana -->|"LogQL"| Loki["Loki (Lưu trữ Log)"]
-        Promtail["Promtail Agent"] -->|"Đẩy log"| Loki
-        cAdvisor["cAdvisor"] -->|"Thu metrics"| Prom
-        MySQLExp["mysqld-exporter"] -->|"Thu metrics"| Prom
-        DockerDaemon["Docker Containers JSON Logs"] -.->|"Thu thập"| Promtail
+    subgraph "Giám sát & Quản lý Log tập trung (monitor_net)"
+        Grafana -->|"PromQL :9090"| Prom["Prometheus (TSDB)"]
+        Grafana -->|"LogQL :3100"| Loki["Loki (Lưu trữ Log)"]
+        Promtail["Promtail Agent"] -->|"Đẩy log :3100"| Loki
+        cAdvisor["cAdvisor :8080"] -->|"Cung cấp metrics"| Prom
+        MySQLExp["mysqld-exporter :9104"] -->|"Cung cấp metrics"| Prom
+        NginxVolume[("nginx_logs Volume<br/>access.log & error.log")] -->|"Đọc file log"| Promtail
     end
 ```
 
@@ -44,9 +44,9 @@ cp .env.example .env
 # Windows PowerShell
 Copy-Item .env.example .env
 ```
-Chỉnh sửa lại tài khoản/mật khẩu trong file `.env` nếu cần.
+Mở file `.env` và thiết lập mật khẩu bắt buộc cho `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`. Nếu để trống, Docker Compose sẽ báo lỗi và từ chối khởi động.
 
-### Bước 2: Tạo chứng chỉ SSL
+### Bước 2: Tạo chứng chỉ SSL (có SAN cho localhost)
 - **Windows:**
   ```powershell
   .\nginx\ssl\generate-ssl.ps1
@@ -56,6 +56,7 @@ Chỉnh sửa lại tài khoản/mật khẩu trong file `.env` nếu cần.
   chmod +x ./nginx/ssl/generate-ssl.sh
   ./nginx/ssl/generate-ssl.sh
   ```
+*Lưu ý:* Chứng chỉ SSL tự ký (self-signed) được cấu hình Subject Alternative Name (SAN) cho `localhost` và `127.0.0.1`. Trình duyệt sẽ cảnh báo về cơ quan chứng thực (Untrusted CA), người dùng chọn "Tiếp tục truy cập" (Proceed to localhost) khi kiểm thử.
 
 ### Bước 3: Khởi chạy hệ thống
 ```bash
@@ -73,19 +74,20 @@ docker compose ps
 
 | Dịch vụ | URL | Tài khoản mặc định | Ghi chú |
 |:---|:---|:---|:---|
-| **WordPress** | `https://localhost` | Khởi tạo ở lần đầu truy cập | Qua Nginx Proxy |
-| **phpMyAdmin** | `https://localhost/pma/` | User: `hoang` hoặc `root` | Quản trị CSDL |
-| **Grafana** | `http://localhost:3000` | User: `hoang` (mật khẩu trong `.env`) | Dashboard giám sát |
-| **Prometheus** | `http://localhost:9090` | - | Thu thập metrics |
-| **Loki** | `http://localhost:3100` | - | Lưu trữ log |
+| **WordPress** | `https://localhost` | Khởi tạo ở lần đầu truy cập | Cổng chính qua Nginx HTTPS |
+| **phpMyAdmin** | `https://localhost/pma/` | Tài khoản MySQL trong `.env` | Định tuyến subpath qua Nginx |
+| **Grafana** | `http://localhost:3000` | Cấu hình trong `.env` | Bind loopback `127.0.0.1` |
+| **Prometheus** | `http://localhost:9090` | - | Bind loopback `127.0.0.1` |
+| **Loki** | `http://localhost:3100` | - | Bind loopback `127.0.0.1` |
 
 ---
 
 ## 4. Các cấu hình bảo mật (Hardening)
-- **Tách mạng nội bộ:** `frontend_net` dành cho Nginx & Web, `backend_net` dành cho Database. Cổng MySQL (3306) không public ra ngoài host.
+- **Tách mạng nội bộ:** `frontend_net` (Nginx, WordPress, phpMyAdmin), `backend_net` (WordPress, phpMyAdmin, MySQL, Exporter), `monitor_net` (Prometheus, Grafana, Loki, Promtail, cAdvisor). Cổng MySQL (3306) không publish ra ngoài host.
+- **Giới hạn phạm vi cổng quản trị:** Grafana (3000), Prometheus (9090), Loki (3100) chỉ bind trên loopback `127.0.0.1`, không mở ra mạng ngoài.
 - **Nginx Security Headers:** Cấu hình `X-Frame-Options`, `X-Content-Type-Options`, `X-XSS-Protection`, `Strict-Transport-Security`, `Referrer-Policy`.
 - **Giới hạn tài nguyên:** Đặt giới hạn `cpus` và `memory` cho các container trong `docker-compose.yml`.
-- **Tách biệt cấu hình:** Toàn bộ thông tin đăng nhập, mật khẩu đưa vào `.env`, không đưa vào repo git.
+- **Tách biệt cấu hình:** Toàn bộ thông tin đăng nhập, mật khẩu đưa vào `.env`, kiểm tra bắt buộc cấu hình trước khi khởi động.
 
 ---
 
